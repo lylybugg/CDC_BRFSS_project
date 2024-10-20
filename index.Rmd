@@ -1,0 +1,759 @@
+---
+title: "CDC_BRFSS_portfolio"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Exploratory Data Analysis Using CDC's 2021 BRFSS
+
+The Centers for Disease Control (CDC) conducts an annual Behavioral Risk Factor Surveillance System (BRFSS). It is a national survey conducted through random telephone and cellular surveillance. The overarching goal is to evaluate risk factors contributing to the leading causes of morbidity and mortality in the population and help guide health policies. Data can be found here: <https://www.cdc.gov/brfss/annual_data/annual_2021.html>
+
+This was a project completed for a data analysis in R course. We were tasked with selecting four variables from this data set: one response variable and the three predictors.
+
+## Variable Selection
+
+The four selected variables are: CVDINFR4 (history of heart attack), ADDEPEV3 (history of depression), \_STATE (state of residence), and ALCDAY5 (number of days alcohol was consumed in the last 30 days).
+
+CVDINFR4 will be the outcome variable. ADDEPEV3, \_STATE, and ALCDAY5 will be the predictor variables. I have chosen CVDINFR4 (history of a heart attack) as my background is working as a nurse practitioner in cardiology. Though risk factors for cardiovascular disease are well known, I am interested in taking the opportunity to personally conduct data analysis regrading this. My overarching question is: what is the relationship between cardiovascular disease and socioeconomic factors such as depression, alcohol consumption, and region.
+
+## Understanding the Variables
+
+### Loading our data
+
+```{r cars}
+# Let's start with a clean environment. 
+rm(list = ls())
+
+# Now we will load our libraries we will use
+library(tidyverse) 
+library(psych)
+library(olsrr)
+library(Hmisc)
+library(lm.beta)
+library(lsr)
+library(caret)
+
+# Finally, load our data, show_col_types as FALSE for a cleaner read.
+brf <- read_csv("brfss2021.csv", show_col_types = FALSE)
+```
+
+### Creating our data frame with selected variables
+
+```{r}
+brf_part2 <- brf |>
+  select(CVDINFR4, ADDEPEV3, `_STATE`, ALCDAY5) |>
+  as.data.frame()
+
+#Let's make sure it worked and check column types 
+glimpse(brf_part2) #Looks like all are imported as dbl
+```
+
+### Investigating and cleaning each variable
+
+We will start with our outcome variable, CVDINFR4: (Ever told) you had a heart attack, also called a myocardial infarction?
+
+```{r}
+unique(brf_part2$CVDINFR4)
+#There are five values with categorical data coded as a numeric value:
+# 1 Yes
+# 2 No
+# 7 Don't know / not sure 
+# 9 Refused
+# BLANK Not asked or missing
+
+# Next we will filter out the 7 and 9 values, as answers such as 'not sure' and 'refused' will be unhelpful in assessing the predictor's impact on the outcome, given we are interested in the presence of absence of history of heart attack. For now we will keep the NA's.
+brf_part2 <- brf_part2 |>
+  filter(is.na(CVDINFR4) | CVDINFR4 != 7 & CVDINFR4 != 9) |>
+  as.data.frame()
+
+#Let's check that we were successful. 
+unique(brf_part2$CVDINFR4)
+```
+
+Next we will look at ADDEPEV3: (Ever told) (you had) a depressive disorder (including depression, major depression, dysthymia, or minor depression)? We will conduct a similiar process as above.
+
+```{r}
+unique(brf_part2$ADDEPEV3)
+#There are five categorical values coded as a numeric value:
+# 1 Yes
+# 2 No 
+# 7 Don't know / not sure
+# 9 Refused
+# BLANK Not asked or missing
+
+# Next we will filter out the 7 and 9 values, as answers such as 'not sure' and 'refused' will be unhelpful in assessing the predictor's impact on the outcome. For now we will keep the NA's.
+brf_part2 <- brf_part2 |>
+  filter(is.na(ADDEPEV3) | ADDEPEV3 != 7 & ADDEPEV3 != 9) |>
+  as.data.frame()
+
+#Let's check that it worked.
+unique(brf_part2$ADDEPEV3)
+```
+
+Next we will look at ALCDAY5: Days in past 30 [days] had alcoholic beverage. We will conduct a similar process as above.
+
+```{r}
+unique(brf_part2$ALCDAY5)
+
+#There are many values here, let's count them.
+brf_part2 |>
+  summarise(n_distinct(ALCDAY5)) 
+# There are 41 values, in the following categories per the codebook:
+# 101 - 107 = Days per week 
+# 201 - 230 = Days in past 30 days 
+# 777 Don't know, not sure 
+# 888 No drinks in past 30 days
+# 999 Refused 
+# BLANK - not asked or missing
+
+#Essentially, the 100's are for days per week. 1 is to represent the day's per week category, and then 01 - 07 is the number of days (numerical value) a week a participant consumed alcohol. The 200's are for days in the last month. 2 is to represent the days in the last month category, and 01-30 are the number of days in the month the participant consumed alcohol. 
+
+#We are going to address cleaning this later on. 
+```
+
+Finally, we will look at \_STATE: the state each participant lives in.
+
+```{r}
+unique(brf_part2$`_STATE`)
+
+#There are many values here, let's count them.
+brf_part2 |>
+  summarise(n_distinct(`_STATE`)) 
+# 53 values, which are as follows:
+# 1 Alabama. 2 Alaska. 4 Arizona. 5 Arkansas. 6. California. 8 Colorado. 9 Connecticut. 10 Delaware. 11 District of Columbia. 13 Georgia. 15 Hawaii. 16 Idaho. 17 Illinois. 18. Indiana. 19. Iowa. 20 Kansas. 21 Kentucky. 22 Louisiana. 23 Maine. 24 Maryland. 25 Massachusetts. 26 Michigan. 27 Minnesota. 28 Mississippi. 29 Missouri. 30 Montana 31 Nebraska 32 Nevada 33 New Hampshire 34 New Jersey 35 New Mexico 36 New York 37 North Carolina 38 North Dakota 39 Ohio 40 Oklahoma 41 Oregon 42 Pennsylvania 44 Rhode Island 45 South Carolina 46 South Dakota 47 Tennessee 48 Texas 49 Utah 50 Vermont 51 Virginia 53 Washington 54 West Virginia 55 Wisconsin 56 Wyoming 66 Guam 72 Puerto Rico 78 Virgin Islands
+```
+
+Given there are so many values, let's group these by regions instead. One common way is by Northeast, Southwest, Southeast, Midwest, and West using designations from National Geographic, which is what we will do here. We will assign each state value to the appropriate region and in doing so create a new column with mutate.
+
+```{r}
+
+brf_part2 <- brf_part2 |>
+  mutate(REGIONS = case_when(
+    `_STATE` %in% c(1,5,11,13,28,29,37,40,45,47,51,54,66,72,78)   ~ 'Southeast',
+    `_STATE` %in% c(9,10,23,24,25,33,34,36,42,44,50)   ~ 'Northeast',
+    `_STATE` %in% c(8,17,18,19,20,26,27,31,32,38,39,46,55)     ~'Midwest',
+    `_STATE` %in% c(4,21,22,35,40,48)     ~'Southwest',
+    `_STATE` %in% c(2,6,15,16,30,41,49,53,56)   ~'West'
+    
+  )) 
+
+# Now we can get rid of _STATE column
+brf_part2 <- brf_part2 |>
+  select(- `_STATE`) 
+
+#Let's check it and make sure it worked 
+head(brf_part2)
+
+```
+
+### Assessing Missing Values
+
+```{r}
+brf_part2 |>
+  summarise(across(everything(), ~ sum(is.na(.)))) # across(everything() will apply the  specified function to all the columns in the df, and then the sum(is.na(.) is to sum the amounts of NA values, with the . being a placeholder representing the column being operated on. 
+```
+
+```{r}
+#As we are creating our new dataframe here, let's remove NA's from CVDINFR4 and ADDEPEV3 given the amount of NA's is quite minimal and therefore unlikely to have significant impact if removed. We will deal with NA's for ALCDAY5 later on.
+
+brf_part2 <- brf_part2 |>
+  drop_na(CVDINFR4, ADDEPEV3)
+
+#Let's doouble check it worked
+brf_part2 |>
+  summarise(across(everything(), ~ sum(is.na(.))))
+
+```
+
+Let's briefly discuss what we've discovered so far.
+
+CVDINFR4 indicates whether or not the participant has ever been told they've had a heart attack or not. Though this is imported as numeric, it is actually categorical, with five values each represented by a number. The details of the values can be seen in the comments section. The levels important to our analysis are 1 (Yes) and 2 (No), regarding history of heart attack. There are two NA's. No extra decimals are implied.
+
+ADDEPEV3 indicates whether or not the participant has a history of depression. Though this is imported as numeric, it is actually categorical, with five values each represented by a number. The details of the values can be seen in the comments section. The levels relevant to this analysis are 1 (Yes) and 2 (No) regarding history of depression. There are three NA's. No extra decimals are implied.
+
+\_STATE is the reported state of residence for the participant. Though this is imported as numeric, it is actually categorical. There are 53 values, with each state / territory assigned to a number. No extra decimals are implied. There are zero NA's. Given there are quite a lot of levels to this variable, I think it is more prudent to group the states into regions, since we will be doing regression analysis and too many levels may be a bit overwhelming. Therefore, as described in the comments, I have mutated this into a REGIONS column, which is categorical with five different levels representing five regional areas of the U.S.
+
+ALCDAY5 is the number of days the participant consumed alcohol in the last 30 days. This is numerical data sorted into categories, with a total of 41 values. Please see the comments section for the exact details. As is, there are no implied decimals. There are many NA's that will need to be dealt with. 888 is meant to be no drinks in the last 30 days and therefore actually zero.
+
+## Addressing Missing Values and Outliers
+
+Given CVDINFR4 and ADDEPEV3 are primarily categorical variables, they do not have outliers in the same way continuous data does, therefore, assessing outliers / using boxplots would not be appropriate. Similarly, for \_STATE/REGIONS, this is categorical and as such there are no true outliers - while some states may be over represented and others underrepresented, that would be more of a data quality issue than true outlier.
+
+For ALCDAY5 it is appropriate to assess for outliers as this will be treated as numerical / continuous data. To best do this, however, we need to convert the coded information to true numeric data (presently it is coded with an initial number to represent the category, i.e. 100's are days per week, 200's are days in the last month).
+
+```{r}
+
+#Initially I converted it to drinks per day, however, this resulted in extremely right skewed data, with a median of zero, and was difficult to comprehend as there were values such as 0.2 drinks a day, which is a bit unrealistic. Then, I tried drinks per week, but encountered a similar issue. Finally, I tried drinks per month; this conversion makes the most sense and is easiest to understand, as it is more intuitive. In addition, it resulted in slightly less right skewed data as the median was not exactly zero. Therefore, I moved forward with this approach. 
+
+brf_part2 <- brf_part2 |>
+    mutate(ALCDAY = case_when(
+      ALCDAY5 >= 101 & ALCDAY5 <=107 ~ (ALCDAY5 - 100) * (30/7), #convert from drinks per week to drinks per month 
+      ALCDAY5 >= 201 & ALCDAY5 <= 230 ~ (ALCDAY5 - 200), #leave as is, it is all ready drinks per month
+      ALCDAY5 == 888 ~ 0, # this is no drinks in past 30 days so should be 0 
+      ALCDAY5 == 777 ~ ALCDAY5, #leave as is for now
+      ALCDAY5 == 999 ~ ALCDAY5 # leave as is for now
+    )) |>
+    as.data.frame()
+
+#Let's make sure it worked.
+head(brf_part2)
+
+```
+
+```{r}
+# Next we will filter out the 777 and 999 values, as answers such as not sure and refused will be unhelpful in assessing the predictor's impact on the outcome. For now we will keep the NA's.
+brf_part2 <- brf_part2 |>
+  filter(is.na(ALCDAY) | ALCDAY != 777 & ALCDAY != 999) |>
+  as.data.frame()
+
+#Now we will drop the original ALCDAY5 so that we just have our new data in ALCDAY
+brf_part2 <- brf_part2 |>
+  select(-ALCDAY5) |>
+  as.data.frame()
+
+#Let's check it to make sure it worked
+glimpse(brf_part2)
+```
+
+```{r}
+# Finally, we will address the NA's, as it is good practice to deal with them before we deal with outliers.
+brf_part2 |>
+  summarise(
+    count_na = sum(is.na(ALCDAY)),
+    total_rows = n(),
+    proportion_na = count_na / total_rows
+  )
+```
+
+I do think the fact that we had marginal NA's in the other columns but are seeing over 2,000 NA's in the alcohol consumption column suggests that this is not random, and thus MNAR. Given people answered the other questions, it could be that people were just less comfortable disclosing their alcohol use. Though, it could be MAR data, as if we looked at the entire BRFSS dataset we may find that a relationship between other questions not answered and alcohol consumption, but for this dataset, I think it would qualify as MNAR.
+
+From what I've read about MNAR the best solution would be imputation as listwise deletion can result in bias. Imputation, however, especially in skewed data like this (as seen in the boxplot below), could also result in bias, as if we impute with median or mean we will be imputing potentially higher or lower values which are not representative of the data as a whole.
+
+It appears the proportion of NAs is only about 5.6%; given this is less than 10% this is generally considered an acceptable amount of data loss from what I understand in my readings. We will still have a very large sample size to work with and I do not think removal will impact statistical power significantly. I think we have to acknowledge that this may result in some unwanted bias in our models if the NAs are truly MNAR, but I would rather do this than potentially over or underestimate alcohol consumption with imputation. I will proceed with removing the NAs.
+
+```{r}
+brf_part2 <- brf_part2 |>
+  drop_na(ALCDAY) |>
+  as.data.frame()
+
+# Let's check we were successful.
+brf_part2 |>
+ summarise(across(everything(), ~ sum(is.na(.))))
+```
+
+### Assessing outliers
+
+Now we can assess for outliers. We do this because outliers can be observations that are unusual and may not fit the overall pattern, which can distort our data analysis if included. Therefore, it is good to check for outliers so we can decide if they are simply data entry errors or if perhaps they suggest an important discovery.
+
+```{r}
+# The best way to quickly identify outliers is to use a boxplot. 
+brf_part2 |>
+  ggplot(aes(
+    x = ALCDAY
+  )) +
+  geom_boxplot() +
+  labs(title = "boxplot ALCDAY",
+       x = 'drinks per day in a month')
+```
+
+This boxplot suggests this data is not normally distributed. Let's investigate further. Unfortunately our sample size is too large for a Shipiro test. So we will look at a histogram.
+
+```{r}
+brf_part2 |>
+  ggplot(aes(
+    x = ALCDAY
+  )) +
+  geom_histogram(bins = 15) + #I dropped the bin width to get a better idea of overall distribution, though this does sacrifice some of the granularity we would get with 30.
+  labs(title = "histogram ALCDAY",
+       x = 'drinks consumed in a month')
+```
+
+Given both the boxplot and histogram, it looks like the data is significantly skewed with a right tail, meaning there are some higher values pulling the mean to the right. The median to the left means most values overall are relatively lower.
+
+### IQR method
+
+The IQR test is more robust for non-normal distributions than 3SD. 3SD works better with normal distributions. Given this data is significantly right skewed and not normally distributed, the IQR is the better removal method as it is less sensitive to skewedness and less influenced by extreme values.
+
+```{r}
+#Let's get our outliers and assess how removal impacts our data.
+
+# Q3 + 1.5(IQR)
+upper_fence <- quantile(brf_part2$ALCDAY, 0.75) + (1.5 * IQR(brf_part2$ALCDAY))
+
+# Q1 - 1.5(IQR)
+lower_fence <- quantile(brf_part2$ALCDAY, 0.25) - (1.5 * IQR(brf_part2$ALCDAY))
+
+# Identify outliers
+outliers <- brf_part2$ALCDAY < lower_fence | brf_part2$ALCDAY > upper_fence
+
+# Calculate percentage of outliers
+percentage_outliers <- mean(outliers, na.rm = TRUE) * 100
+percentage_outliers
+
+```
+
+Unfortunately the percentage of outliers is 15.2%; generally, my understanding in my readings is 5-10% removal is considered acceptable. Higher percentages may indicate that the outliers are actually a significant part of the data distribution. I think these outliers are likely valid giving drinking habits do vary widely. I think truthfully these outliers are meaningful and perhaps should be kept in the data. However, for the sake of this assignment, I will remove them. Given I do think they are valid, I will use log transformation to help reduce their impact on statistical analysis, and if it works, will then remove outliers from the log transformed data.
+
+```{r}
+#Let's see if log transformation may help the data become more normally distributed and help out outlier removal become more effective and lessen the influence of extreme values.
+
+#First let's get descriptive statistics of our original data for comparison 
+summary(brf_part2$ALCDAY)
+```
+
+### Log transformation
+
+```{r}
+# Applying log transformation
+brf_part2_logs <- brf_part2 |>
+  mutate(LOGALC = log(brf_part2$ALCDAY + 1)) #need the addition of one due to the many zeros in the dataset.
+
+#Obtaining outlier data for log transformed dataset
+# Q3 + 1.5(IQR)
+upper_fencelog <- quantile(brf_part2_logs$LOGALC, 0.75) + (1.5 * IQR(brf_part2_logs$LOGALC))
+
+# Q1 - 1.5(IQR)
+lower_fencelog <- quantile(brf_part2_logs$LOGALC, 0.25) - (1.5 * IQR(brf_part2_logs$LOGALC))
+
+# Identify outliers
+outliers_logs<- brf_part2_logs$LOGALC < lower_fencelog | brf_part2_logs$LOGALC > upper_fencelog
+
+# Calculate percentage of outliers
+percentage_outliers_log <- mean(outliers_logs, na.rm = TRUE) * 100
+percentage_outliers_log
+```
+
+```{r}
+#It has decreased to 0%. Let's check a comparison summary. 
+summary(brf_part2_logs$LOGALC)
+```
+
+I think the log transformation has helped our data become more normalized given the mean and median are now closer and the number of outliers has substantially reduced. In fact, there are no outliers to remove after log transformation. Let's check to see if our data is normalized enough to pursue investigation of outliers by 3SD with a q-q plot.
+
+```{r}
+brf_part2_logs |>
+  ggplot(aes(
+    sample = LOGALC
+  )) +
+  geom_qq() +
+  labs(title = "q-q LOGALC")
+
+```
+
+While more normal, it is not a normal distribution, therefore pursuing 3SD for our log transformed data is not appropriate. We will stick with our IQR assessment above, though there are no outliers left, for the sake of the assignment I will go through the code to remove outliers below.
+
+### Removal of outliers
+
+```{r}
+# First I will replace the ALCDAY column with the transformed data of LOGALC.
+brf_part2 <- brf_part2_logs |>
+  mutate(ALCDAY = LOGALC) |>
+  select(- LOGALC)
+
+#Now we will remove our outliers (there are none, but if there were, I would continue with this code)
+brf_part2 <- brf_part2 |> 
+  filter(
+    ALCDAY >= lower_fencelog,
+    ALCDAY <= upper_fencelog
+  )
+  
+# Let's see our end result.
+summary(brf_part2$ALCDAY)
+```
+
+As expected, its the same summary as after log transformation since there were no outliers to remove. We will move forward now that our efforts have helped normalize our data.
+
+## Visual Exploratory Data Analysis of Variables
+
+First let's complete our analysis of our numerical variable, ALCDAY (which is now the LOGALC values). We will repeat out boxplot to see if it looks different than before outlier removal.
+
+#### Univariate Boxplot of ALCDAY
+
+```{r}
+brf_part2 |>
+  ggplot(aes(
+    x = ALCDAY
+  )) +
+  geom_boxplot() +
+  labs(title = "boxplot of ALCDAY",
+       x = 'drinks per month')
+```
+
+The boxplot shows distribution of our log transformed data for alcohol consumption. When comparing it to the original boxplot in Q12, we can see that the median line showing the central tendency has shifted to the middle, the span from Q1 to Q3 shows a reduction in variability, and there are no outliers. Overall, compared to our original boxplot, this log transformed data suggests that the data now has a more normal distribution which will hopefully contribute to the validity of our statistical analyses coming up.
+
+#### Univariate Barplot of CVDINFR4
+
+Now let's look at our outcome variable, CVDINFR4. Since it is categorical, we will use a bar chart to evaluate the counts.
+
+```{r}
+brf_part2 |>
+  ggplot(aes(
+    x = factor(CVDINFR4), 
+    fill = factor(CVDINFR4))) + #fill adds color to the bars by specified variable
+  geom_bar() +
+  scale_x_discrete(
+    labels = c("1" = "Yes", "2" = "No")) + #changes 1 and 2 to yes or no for clarity
+  scale_fill_discrete(labels = c("1" = "Yes", "2" = "No")) + # changes my key values 
+  scale_y_continuous(labels = scales::comma) + # need this so it is in 100,000 format not 1e format, again, for clarity
+  labs(title = 'distribution of heart attack',
+       x = 'history of heart attack',
+       y = 'count',
+       fill = 'key') #title for key
+```
+
+The barplot shows distribution of history of heart attack within our dataset. Each bar represents the two categories (yes or no), and we can see that the vast majority of participants reported no history of heart attack, while perhaps only 25,000 or so of the 400,000+ participants reported history of heart attack. It would be interesting to see if we could find other data documenting history of heart attack in the population and see if the proportion is similar.
+
+#### Univariate Barplot of ADDEPEV3
+
+Now we will look at ADDEPEV3. Since it is categorical, we will use a bar chart with counts, as we did above.
+
+```{r}
+brf_part2 |>
+  ggplot(aes(
+    x= factor(ADDEPEV3), 
+    fill=factor(ADDEPEV3))) + 
+  geom_bar() +
+  scale_x_discrete(
+    labels = c("1" = "Yes", "2" = "No")) + 
+  scale_fill_discrete(labels = c("1" = "Yes", "2" = "No")) + 
+  scale_y_continuous(labels = scales::comma) + 
+  labs(title = 'distribution of depression',
+       x = 'history of depression',
+       y = 'count',
+       fill = 'key') 
+
+```
+
+The barplot shows distribution of history of depression within our dataset. Each bar represents the two categories (yes or no), and we can see that the vast majority of participants reported no history of depression, though there are more people reporting history of depression than heart attack. In fact, visually it looks to be about three-four times more.
+
+#### Univariate Barplot of REGIONS
+
+Now we will look at REGIONS. Since it is categorical, we will use a bar chart with counts, as we've done above.
+
+```{r}
+brf_part2 |>
+  ggplot(aes(
+    x= factor(REGIONS), 
+    fill=factor(REGIONS))) + 
+  geom_bar() +
+  scale_y_continuous(labels = scales::comma) + 
+  labs(title = 'regional distribution',
+       x = 'regions',
+       y = 'count',
+       fill = 'key')
+
+```
+
+The barplot shows the regional distribution of our dataset. Most participants hailed from the Midwest, followed by the Northeast, Southeast, West, and then Southwest. Visually, it seems that the eastern portion of the country is much more represented in this dataset than the west coast. In fact, the count for West is only about half that of the Midwest, and the count for Southwest is only perhaps a little over half of the count for West. This suggests that our data may have more applicability to the east coast than the west in terms of how representative it is of the entire population.
+
+#### Bivariate Barplot of CVDINFR4 and REGIONS
+
+Now let's explore some combinations. For the sake of time for the grader, I will not do every combination, just the outcome variable CVDINFR4 with all the predictors.
+
+```{r}
+# REGION (REGIONS) AND HEART ATTACK (CVDINFR4)
+# Both categorical data, so we will use a bar plot. First we will look at data as a whole.
+brf_part2 |>
+  ggplot(aes(
+    x = CVDINFR4)) +
+  geom_bar() +
+  facet_grid(. ~ REGIONS) +  # I used facet so we can compare regions easily
+  labs(title = "distribution of heart attacks by region",
+       x = 'history of heart attack') +
+  scale_x_discrete(
+    limits = c("1", "2"),  # limit the displayed categories
+    labels = c("1" = "Yes", "2" = "No"))  # and change labels
+  
+
+# Now let's look at only those who do have a history of heart attack.
+brf_part2 |>
+  filter(CVDINFR4 == 1) |>
+  ggplot(aes(
+    x =CVDINFR4)) +
+  geom_bar() +
+  facet_grid(. ~ REGIONS) + 
+  labs(title = "distribution of heart attacks by region",
+       x = 'history of heart attack') +
+  theme(axis.text.x = element_blank()) #to get rid of the 0.5, 1, 1.5 values on x axis since we are only looking at the 1 value
+
+```
+
+I coded two barplots, both faceted by region, one showing yes and no responses for history of heart attack and the second showing just yes responses, to perhaps better see trends of people with history of heart attack by region more clearly. It is interesting because it follows the same pattern as the counts for each region; the highest count of reported history of heart attacks is in the Midwest, followed by the Northeast, Southeast, West, and Southwest. Because it is directly related to the counts of participants per region, I think it is difficult to say that the Midwest has a higher rate of history of heart attacks than other regions - it could just be simply that more people in the Midwest participated in the survey. To further investigate, we'd need to look at the proportions with a prop table to get a better idea of which region truly has a higher incidence of history of heart attack in relation to the sample size of each region.
+
+#### Bivariate Boxplot and Violinplot of CVDINFR4 and ALCDAY
+
+```{r}
+# HEART ATTACK (CVDINFR4) AND ALCOHOL CONSUMPTION (ALCDAY)
+# Here we have a categorical and numerical variable so we will use a boxplot.
+brf_part2 |>
+  ggplot(aes(
+    y = factor(CVDINFR4), 
+    x = ALCDAY, 
+    fill = factor(CVDINFR4))) +
+  geom_boxplot() +
+  scale_fill_discrete(labels = c("1" = "Yes", "2" = "No")) +
+  labs(title = 'heart attack history and alcohol consumption',
+       x = 'log transformed alcohol consumption',
+       y = 'history of heart attack',
+       fill = 'key') +
+    scale_y_discrete(
+    limits = c("1", "2"),  # limit the displayed categories
+    labels = c("1" = "Yes", "2" = "No")  # and change labels
+  )
+  
+# And we'll look at a violin plot to combine summary statistics and density plot and get a better idea of the distribution.
+  brf_part2 |>
+  ggplot(aes(
+    x = factor(CVDINFR4), 
+    y = ALCDAY, 
+    fill = factor(CVDINFR4))) +
+  geom_violin() +
+  scale_fill_discrete(labels = c("1" = "Yes", "2" = "No")) +
+  scale_x_discrete(
+    limits = c("1", "2"), 
+    labels = c("1" = "Yes", "2" = "No")) +
+  labs(title = 'alcohol consumption by heart attack history',
+       x = 'history of heart attack',
+       y = 'log transformed alcohol consumption',
+       fill = 'key') 
+  
+```
+
+I did both plots in order to have a plot offering central tendency and variability information (boxplot) and one with density information (violin).
+
+The boxplot illustrates the distribution of log transformed alcohol consumption by history of heart attack. Interestingly, the median alcohol consumption is lower for individuals who reported history of heart attack than those who did not. There is more variability in alcohol consumption for those without history of heart attack. There are no outliers seen, though both groups have a long right whisker which suggests there are data points significantly higher than the Q3.
+
+The violin plot shows alcohol consumption by heart attack history. Both groups in heart attack history show wide bases which implies that regardless of that history they both have lower levels of alcohol consumption overall. From the wide base it thins out quickly and significantly for both groups, suggesting there are much fewer participants with higher alcohol consumption overall. Those without a history of heart attack have more variability in the plot, which could mean they have a wider range of alcohol consumption than those who do have a history of heart attack. This finding is in line with the boxplot, which also revealed more variability for this combination.
+
+#### Bivariate Barplot of CVDINFR4 and ADDEPEV3
+
+```{r}
+# HEART ATTACK (CVDINFR4) AND DEPRESSION (ADDEPEV3)
+# Two categorical variables, so we will proceed with a bar plot.
+
+brf_part2 |>
+  ggplot(aes(
+    x = factor(ADDEPEV3), 
+    fill = factor(CVDINFR4))) +
+  geom_bar(position = "dodge") +  # want it by group, not stacked and not proportion
+  scale_fill_discrete(labels = c("1" = "Yes", "2" = "No")) +
+  scale_y_continuous(labels = scales::comma) +
+  labs(title = 'history of heart attack by depression',
+       x = 'history of depression',
+       y = 'count',
+       fill = 'heart attack') 
+
+```
+
+This barplot shows history of depression grouped by history of heart attack. Here again we see that most participants did not report a history of depression or heart attack. For those who did report a history of depression and history of heart attack, the bar is shorter than those who reported no history of depression and history of heart attack, suggesting those with no history of depression may have higher rates of history of heart attack. It may be worth exploring behaviors of those with and without depression to see which group engages in behaviors associated with higher risk of heart disease.
+
+## Descriptive Statistics of Variables
+
+For categorical variables, descriptive statistics include assessments such as frequency counts, percentages, mode, and contingency tables. Therefore, for our three categorical variables CVDIFNR4, ADDEPEV3, and REGIONS, we will conduct these types of statistics.
+
+### CVDINFR4
+
+```{r}
+#CVDINFR4
+#Let's get frequency counts and percentages.
+brf_part2 |>
+  count(CVDINFR4) |>
+  mutate(percentage = n / sum(n) * 100)
+
+# The mode may not be as useful here, though technically it would be 2 'No' as the vast majority of participants reported not having a history of heart attack.
+
+#And let's do a contingency table with one of our predictor variables.
+brf_part2 |>
+  group_by(CVDINFR4, ALCDAY = round(ALCDAY, 2)) |>
+  summarise(count = n(), .groups = 'drop')
+
+# table(brf_part2$CVDINFR4, round(brf_part2$ALCDAY, 2)) #columns ALCDAY, rows CVDINFR4
+# Run this to see the table, as it is long - you may want to un-comment this as I find this more readable than the results using the pipe above. But for the assignment I am trying to use the pipe as much as possible. 
+
+#And finally a correlation check, which we can do with a categorical and numerical variable.
+CVDINFR4_binary <- ifelse(brf_part2$CVDINFR4 == 1, 1, 0) # to run the correlation it needs to be binary format with 0 representing 2 (absence) and 1 being 1 (presence).
+
+cor.test(CVDINFR4_binary, brf_part2$ALCDAY) #point biserial correlation can be used because CVDINFR4 has only two levels and in R if a binary variable is used it will automatically do this.
+```
+
+The statistics reveal that only 5.28% of participants reported having a history of heart attack and 94.72% reported no history of a heart attack.
+
+The cross tabulation of CVDINFR4 and ALCDAY suggests that as an overall trend as alcohol consumption increases, reports of history of heart attack are lower, with some exceptions, particularly at the highest level of alcohol consumption 3.43 where the numbers of heart attack history reported jumps up from low levels to 1237. There seems to be a trend where lower alcohol consumption correlates to a higher number of people reporting no history of heart attack, however this may be confounded given the majority of participants reported low alcohol consumption overall. To better assess this, I conducted a point biserial correlation check. Given the low p value less than 0.05 and the high T score, this suggests there is a statistically significant correlation and we can reject the null hypothesis which is that the correlation is zero. However, the correlation coefficient is -0.057 (value ranges from -1 to +1) and thus suggests the negative relationship is weak and may not be meaningful or may be influenced by other factors.
+
+### ADDEPEV3
+
+```{r}
+#ADDEPEV3
+#Let's get frequency counts and percentages.
+brf_part2 |>
+  count(ADDEPEV3) |>
+  mutate(percentage = round(n / sum(n) * 100, 2))
+
+# The mode may not be as useful here, though technically it would be 2 'No' as the vast majority of participants reported not having a history of depression.
+
+#And let's do a contingency table with our outcome variable. This time we'll do it in percentages using a prop.table
+brf_part2 |>
+  count(CVDINFR4, ADDEPEV3) |>
+  mutate(percentage = round(n / sum(n) * 100, 2))
+
+#prop.table(table(brf_part2$CVDINFR4, brf_part2$ADDEPEV3)) * 100
+#Again, this to me was a bit more readable, and presents the same data as the above pipe code, so uncomment if it is helpful.
+
+```
+
+The statistics reveal that only 19.9% of participants reported having a history of depression, while 80.1% reported no history of depression. The cross tabulation / prop table of CVDINFR4 and ALCDAY suggests that only 1.3% of participants with depression reported a history of heart attack, compared to 4.0% of those without depression. Conversely, 18.6% of participants with depression reported no history of heart attack, and 76.11% without depression also reported no history of a heart attack. This suggests there could be higher rates of history of heart attack in those without history of depression.
+
+### REGIONS
+
+```{r}
+#REGIONS
+#Let's get frequency counts and percentages.
+brf_part2 |>
+  count(REGIONS) |>
+  mutate(percentage = round(n / sum(n) * 100, 2))
+
+# The mode may not be as useful here, but given the most participants reported being from the Midwest, it would be the Midwest.
+
+#Now we will use a prop table to better evaluate the proportion of history of heart attack relative to the population numbers.
+brf_part2 |>
+  count(CVDINFR4, REGIONS) |>
+  mutate(percentage = round(n / sum(n) * 100, 2))
+```
+
+The statistics reveal that 29.3% of the participants hailed from the Midwest, 27.7% from the Northeast, 19.8% from the Southeast, 8.8% in the Southwest, and 15.4% in the West. The contingency table reveals participants from the Midwest reported the most history of heart attack at 6137, followed by the Northeast at 5483, Southeast at 4958, West at 2762, and Southwest 1983. Overall, however, in all regions the count of those without history of a heart attack is much higher than those with a history. The prop table helps us get a sense of history of heart attack in proportion with the population, and it follows the same pattern with those is the Midwest having the highest proportion of history of heart attack (1.5%) relative to population, with Southwest having the least amount reported at 0.5%. This has implications for further research to look at various risk factors, particularly differences between these two regions.
+
+### ALCDAY
+
+```{r}
+# ALCDAY is our only numerical variable. So our descriptive statistics will include mean, median, mode, max, min, sd, and IQR, much of which we have all ready assessed.
+
+#ALCDAY
+summary(brf_part2$ALCDAY)
+#  Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+# 0.0000  0.0000  0.6931  1.0159  1.7918  3.4340 
+
+#And we'll get the sd. 
+brf_part2 |>
+  summarise(round(sd(ALCDAY), 2))
+#1.171942
+
+```
+
+For our log transformed ALCDAY data, the range is 0 - 3.43, with an IQR of 0 - 1.79, median of 0.69, mean of 1.02, and standard deviation of 1.17.
+
+The back transformed central measures of tendency are easier to interpret in context. The range of drinks per month is 0 - 30. The IQR is 0 - 5, indicating that 50% of participants consume 0 - 5 alcoholic drinks monthly. The median of 1 suggests half of the people drink only one or less alcoholic beverages. The mean of 4.927 is higher than the median, which means likely there are a few participants who consume a much higher amount than most. The high standard deviation of 8.25 reflects a significant variability in the amount consumed among the participants.
+
+```{r}
+# It is a bit more difficult to look at the log transformed central measures of tendency in context, so we will also back transform the data and run them again.
+back_transformed_ALCDAY <- exp(brf_part2$ALCDAY) - 1 #include - 1 because we added 1 with the log transform given we had many zeros in our dataset.
+
+summary(back_transformed_ALCDAY)
+#    Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+#   0.000   0.000   1.000   4.927   5.000  30.000
+
+brf_part2 |>
+  summarise(round(sd(back_transformed_ALCDAY), 2))
+# sd is 8.256367
+
+```
+
+### Bivariate analyses
+
+Here we will run a few more bivariate analyses between our predictor variables and outcome variable.
+
+We will look at the chi square test to assess the relationship between the categorical variables of CVDINFR4 and REGIONS, CVDINFR4 and DEPRESSION (ADDEPEV43). We will use the chi square test of independence since we are comparing two categorical variables.
+
+```{r}
+
+#CVDINFR4 AND REGIONS
+chisq.test(table(brf_part2$CVDINFR4, brf_part2$REGIONS))
+
+#CVDINFR4 AND ADDEPEV3
+chisq.test(table(brf_part2$CVDINFR4, brf_part2$ADDEPEV3))
+
+#Interestingly, I learned that Yate's correction is when there is a 2x2 contingency table and corrects for overestimation of significance that may occur in small samples. 
+
+```
+
+To assess CVDINFR4 with our numerical variable ALDAY, we will use a T test.
+
+```{r}
+
+#First let's check variances to help decide which T test to use.
+var.test(ALCDAY ~ CVDINFR4, data = brf_part2)
+# The null hypothesis is that the variances are equal. Given the F value of 0.9 with a very low p value, there is strong evidence to reject the null. 
+
+#Since variances are not likely equal, we will use the Welch T test. 
+t.test(ALCDAY ~ factor(CVDINFR4), data = brf_part2)
+#Since CVDINFR4 is categorical, it must be the independent value for this test and alcohol consumption is the dependent value. 
+
+```
+
+A chi square test was utilized to assess the relationship between the categorical variables of CVDINFR4 and REGIONS, CVDINFR4 and DEPRESSION (ADDEPEV43). The chi square test of independence was used since we are comparing two categorical variables.
+
+Fro CVDINFR4 and REGIONS the null hypothesis is that there is no association between the two. The results here of X\^2 242.87 and extremely low p value \< 0.05 suggest we can reject the null hypothesis. This means there may be a statistically significant association between history of heart attack and region.
+
+For CVDINFR4 and ADDEPEV3 the null hypothesis is that there is no association between the two. The results here of X\^2 313.49 and extremely low p value less than \<0.05 suggest we can reject the null hypothesis. This means there may be a statistically significant association between history of heart attack and history of depression.
+
+A T test was used to assess CVDINFR4 with the numerical variable ALDAY. Therefore, variance was checked first to determine what type of T test to run. The null hypothesis is that the variances are equal. Given the F value of 0.9 with a very low p value, there is strong evidence to reject the null. Since variances are not likely equal, the Welch T test was used. The null hypothesis is that there is no difference in means between the groups.
+
+However, the high T value of -38.1 indicates a significant difference between the means of the two groups, supported by a very low p value. Therefore, we reject the null. We see those with heart attack history having a smaller mean than those without history of heart attack, as seen in the sample estimates, with a confidence interval suggesting the true difference in means is between -0.32 and -0.29.
+
+Overall, this suggests there is a significant difference in drinking habits between the two groups which means there may be a relationship to history of heart attack.
+
+## Regression Models and Assessment of our Research Question
+
+Logistic regression is the most appropriate for a categorical outcome variable. Since CVDINFR4 only has two levels (yes or no) we can use logistic regression with glm. We specify binomial because CVDINFR4 has a binary outcome (yes or no).
+
+```{r}
+#To make sure our understanding of the results are clear, we will recode ADDEPEV3 as binary, like we did with CVDINFR4 above.
+ADDEPEV3_binary <- ifelse(brf_part2$ADDEPEV3 == 1,1,0) #because we want 0 to be absence of and 1 to be presence of depression
+```
+
+### Model 1
+
+For model 1 we will look at alcohol consumption per month and history of depression as predictors of history of heart attack. This may be interesting as there could also be an association between alcohol intake and depression.
+
+```{r}
+ 
+mod1 <- glm(CVDINFR4_binary ~ ALCDAY + ADDEPEV3_binary, data = brf_part2, family = binomial)
+summary(mod1)
+
+# Because we are modeling a binary outcome and using logistic regression, we need to calculate the odds ratios to better understand our coefficients. 
+(exp(coef(mod1)) - 1) * 100 # use exp to get odds ratios, and to get the percentage increase we use - 1 and multiply by 100.
+
+```
+
+Model 1 looks at impact of alcohol consumption and history of depression on the log odds / likelihood of having history of heart attack. For best interpretation, we will look at this model through the lens of odds ratios and percent increases. The log odds of having history of a heart attack when both alcohol consumption is zero and there is no history of depression is -2.74, found to be statistically significant given the p value less than 0.05. The coefficient for ALCDAY suggests that for each one unit increase in ALCDAY, the odds of having a history of heart attack decrease by approximately 21.43%, which interestingly indicates higher alcohol consumption may be related to lower histories of heart attacks. This may make sense if people who have had a heart attack are more cautious with alcohol intake. The small p value less than 0.05 suggests this too is statistically significant. The coefficient for ADDEPEV3 suggests those with depression have about 31.15% higher odds have having a history of heart attack than those without. This too is found to be statistically significant with a low p value less than 0.05. This is interesting given our exploratory data analysis actually suggested otherwise, though that was a raw estimate and logistic regression gives a controlled estimate. As for the model fit, the residual deviance is lower than the null, suggesting ALCDAY and ADDEPEV3 do explain a portion of the variability in history of heart attack.
+
+### Model 2
+
+Now let's do a second model, looking at history of depression and region on the outcome of history of heart attack. It may be interesting as different regions may also have different levels of depression.
+
+```{r}
+mod2 <- glm(CVDINFR4_binary ~ ADDEPEV3_binary + factor(REGIONS), data = brf_part2, family = binomial)
+summary(mod2)
+
+# And now let's get our odds ratios / percent increases to better understand the coefficients in context. 
+(exp(coef(mod2)) - 1) * 100
+```
+
+Model 2 evaluates the relationship between history of heart attack and the predictor variables of alcohol consumption and region. The intercept coefficient suggests that the log odds of having history of heart attack when both ADDEPEV3 and REGIONS are at their reference levels (no depression history and Midwest respectively) is -2.97, found to be statistically significant with a low p value less than 0.05. The coefficient for ADDEPEV3 indicates that if a person has depression the odds of having a heart attack increase by about 33%. This is similar to the findings in model 1. The reference for REGIONS is Midwest. Given our mode is the Midwest, I think its appropriate to keep it that way given perhaps it can reflect the most common scenario, and having the larger sample size it could also result in greater statistical power detecting differences. The coefficient for Northeast had a p value of 0.22 suggesting it is not statistically significant. The coefficient for Southeast is statistically significant with p less than 0.05 and indicates there is a 20.6% increase in odds of having history of heart attack than the Midwest. The Southwest coefficient is also statistically significant with p less than 0.05 and suggests the odds of having history of heart attack are 8.1% higher than those in Midwest. The West coefficient is also statistically significant with very low p value less than 0.05, but with a negative association, suggesting the odds of having history of heart attack decrease by 15.2% compared to the Midwest. As for model fit, the residual deviance is lower than the null and therefore indicates the model does explain some of the variability in history of heart attack.
+
+### Model Fit Tests
+
+And finally we will look at some comparison model fit tests. A good test to do this is the ANOVA likelihood ratio test because we are comparing nested models (both models predict the same outcome, with one containing more complex parameters, that being the second model as it includes REGIONS with multiple levels).
+
+```{r}
+anova(mod1, mod2, test = "LRT")
+
+#And now from our ANOVA LRT we can calculate the p value to get a better idea of it our ANOVA is significant or not.
+1 - pchisq(abs(-1148.7), 3) #Here we use our change in deviance and our degrees of freedom difference, in that order. Note, we need to use the absolute value of -1148.7 since chi squared distribution is always positive.
+
+
+```
+
+Regarding overall model fit, model 1 has the better fit between the two. Model 1 has an AIC of 165255 and model 2 has an AIC of 166410; given model 1 has the lower AIC, this suggests is has the better fit. This is supported by the fact model 1 has a lower residual deviance overall (165249) and a greater difference in null and residual difference than model 2 (residual difference 166398). This indicates that model 1's predictors may explain a more significant portion of variability in history of heart attack than model 2. The p value for our ANOVA LRT is very low at 0, suggesting that the difference in the model fits is statistically significant, giving further evidence that model 1 is the better fitting model.
